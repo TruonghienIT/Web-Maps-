@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>Google Maps A*</title>
+    <link rel="shortcut icon" type="image/ico" href="https://static-00.iconduck.com/assets.00/map-marker-icon-397x512-28nokyyg.png" sizes="8x4"/>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBnJKzKGqg4qjRpV_zFdrOxIoB4mOlXKJU&libraries=places&callback=initMap" async defer></script>
+    <script>
+        var map;
+        var directionsService;
+        var directionsRenderer;
+        var centerPosition = {lat: 21.0285, lng: 105.8542};
+        var flightPath;
+        var startMarker;
+        var goalMarker;
+        var directionsRendererArray = [];
+
+        function initMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: centerPosition,
+                zoom: 12
+            });
+
+            directionsService = new google.maps.DirectionsService();
+            startAutocomplete = new google.maps.places.Autocomplete(document.getElementById('start'), {
+                types: ['geocode'],
+                componentRestrictions: { country: 'vn' } // Giới hạn gợi ý địa điểm ở Việt Nam
+            });
+
+            goalAutocomplete = new google.maps.places.Autocomplete(document.getElementById('goal'), {
+                types: ['geocode'],
+                componentRestrictions: { country: 'vn' } // Giới hạn gợi ý địa điểm ở Việt Nam
+            });
+            
+            centerMarker = new google.maps.Marker({
+                position:{lat: 21.0285, lng: 105.8542},
+                map: map,
+                title: 'Hà Nội'
+            })
+        }
+
+        // đi đến trung tâm hà nội nếu chưa có quãng đường, nếu có quãng đường thì đi chuyển hiện thị điểm starts
+        function centerMap() {
+            // initMap();
+             map.panTo(centerPosition);
+            // Di chuyển mượt mà đến tọa độ trung tâm
+            var currentZoom = map.getZoom();
+            var targetZoom = 12; // Độ thu phóng mong muốn
+            var zoomStep = 1; // Mức tăng độ thu phóng mỗi lần
+
+            var zoomInterval = setInterval(function() {
+                if (currentZoom < targetZoom) {
+                    currentZoom += zoomStep;
+                    map.setZoom(currentZoom);
+                } else {
+                    clearInterval(zoomInterval); // Dừng lại khi đạt đến độ thu phóng mong muốn
+                }
+            }, 200);
+        }
+
+        // xóa
+        function clearFields() {
+            document.getElementById('start').value = '';
+            document.getElementById('goal').value = '';
+            centerPosition = {lat: 21.0285, lng: 105.8542}
+            clearMap();
+            document.getElementById('distanceInfo').innerText = '';
+            document.getElementById('durationInfo').innerText = ``;
+        }
+
+        // cũng là xóa
+        function clearMap() {
+             if (flightPath != null) {
+                flightPath.setMap(null)
+            }
+            if (startMarker) startMarker.setMap(null);
+
+            if (goalMarker) goalMarker.setMap(null);
+
+            if (directionsRenderer) directionsRenderer.setMap(null);
+
+            for (const directionsRenderer of directionsRendererArray) {
+                directionsRenderer.setMap(null)
+            }
+            directionsRendererArray =[];
+        }
+
+        // thực hiện chức năng
+        function calculateRoute() {
+            const time_start = performance.now()
+            var start = document.getElementById('start').value;
+            var goal = document.getElementById('goal').value;
+            var travelMode = document.getElementById('travelMode').value;
+
+             // Kiểm tra xem các trường có dữ liệu không
+            if (!start || !goal) {
+            return;
+            }
+
+            // gửi dữ liệu xuống để xử lý dữ liệu
+            fetch(`/directions?start=${start}&goal=${goal}&travelMode=${travelMode}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+                // console.log(data)
+                console.log(travelMode)
+
+                // tinhs quãng đường
+                const distance = data.distance;
+                document.getElementById('distanceInfo').innerText = `${distance}`;
+
+                // tính thời gian
+                const duration = data.duration;
+                document.getElementById('durationInfo').innerText = `${duration}`;
+
+                // tạo mảng luu trữ tọa độ lat và lng
+                var flightPlanCoordinates = []
+                const path = data.path;
+
+                clearMap();
+
+                for (const point of path) {
+                    console.log(point);
+                    flightPlanCoordinates.push({
+                        lat: point[0],
+                        lng: point[1]
+                    });
+                }
+                console.log(flightPlanCoordinates)
+                map.panTo(flightPlanCoordinates[0])
+                centerPosition = flightPlanCoordinates[0];
+                startMarker = new google.maps.Marker({
+                    position: flightPlanCoordinates[0],
+                    map,
+                    title: "Start Location",
+                });
+
+
+                goalMarker = new google.maps.Marker({
+                    position: flightPlanCoordinates[flightPlanCoordinates.length - 1],
+                    map,
+                    title: 'Goal Location',
+                });
+
+                // vẽ đường đi nhưng theo đường chim bay
+                flightPath = new google.maps.Polyline({
+                    path: flightPlanCoordinates,
+                    geodesic: true,
+                    strokeColor: "#ff0051",
+                    strokeOpacity: 1.0,
+                    strokeWeight: 2,
+                 });
+
+                flightPath.setMap(map);
+
+                if (flightPlanCoordinates.length < 25) {
+                    draw2(flightPlanCoordinates, travelMode);
+                } else {
+                    draw(flightPlanCoordinates, travelMode);
+                }
+
+            });
+            const time_end = performance.now()
+            console.log(`Time Taken : ${time_end - time_start}s`)
+        }
+
+        // đây là rander luôn ra các đoạn đường nhưng tối đa chỉ đc 25 đoạn
+        function draw2(flightPlanCoordinates, travelMode) {
+            var waypoints = [];
+            for (var i = 0; i < flightPlanCoordinates.length ; i++ ) {
+                const waypoint = {
+                    location: flightPlanCoordinates[i],
+                    stopover: (i === flightPlanCoordinates.length - 1)
+                }
+
+                waypoints.push(waypoint)
+            }
+
+            const request = {
+                origin: flightPlanCoordinates[0],
+                destination: flightPlanCoordinates[flightPlanCoordinates.length - 1],
+                travelMode: google.maps.TravelMode[travelMode],
+                provideRouteAlternatives: false,// Yêu cầu các lựa chọn đường
+                waypoints: waypoints
+            };
+
+            directionsService.route(request, function(result, status) {
+                if (status === google.maps.DirectionsStatus.OK) {
+                    if (directionsRenderer == null) {
+                        directionsRenderer = new google.maps.DirectionsRenderer();
+                    }
+                     directionsRenderer.setMap(map);
+                    directionsRenderer.setDirections(result);
+                } else {
+                    alert('Không thể tìm đường');
+                }
+            });
+        }
+
+
+        async function draw(flightPlanCoordinates, travelMode) {
+            for (var i = 0; i < flightPlanCoordinates.length - 1; i++ ) {
+                const request = {
+                    origin: flightPlanCoordinates[i],
+                    destination: flightPlanCoordinates[i+1],
+                    travelMode: google.maps.TravelMode[travelMode],
+                    provideRouteAlternatives: false // Yêu cầu các lựa chọn đường
+                };
+
+                await directionsService.route(request, function(result, status) {
+                    if (status === google.maps.DirectionsStatus.OK) {
+                        var directionsRenderer = new google.maps.DirectionsRenderer();
+                        directionsRenderer.setMap(map);
+                        directionsRenderer.setDirections(result);
+
+                        directionsRendererArray.push(directionsRenderer);
+
+                    } else {
+                        alert('Không thể tìm đường');
+                    }
+                });
+
+            }
+
+        }
+    </script>
+    <style>
+        #map {
+            height: 100%;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            position: absolute;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            max-width: 90%;
+            overflow: hidden;
+        }
+
+        .card {
+            flex: 1 1 320px; /* Có thể co giãn và có chiều rộng tối thiểu */
+            max-width: 320px;
+            width: 320px;
+            height: 130px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            margin-bottom: 20px;
+            margin-right: 20px;/* Space between cards */
+        }
+
+
+        .input1 {
+            padding-bottom: 10px;
+        }
+        .input2 {
+            padding-bottom: 10px;
+        }
+        button {
+            width: auto;
+            margin-left: 10px;
+            height: 20px;
+            background-color: #ff1493;
+            cursor: pointer;
+            border-radius: 4px;
+            border: 1px;
+            color: white;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box; /* Bao gồm padding và border trong tổng chiều rộng của trường nhập liệu */
+        }
+        button:hover {
+            background-color: #ff69b4;
+        }
+        .button-container {
+            /*margin-top: 5px;*/
+            display: flex;
+            align-items: center;
+        }
+        #distanceInfo {
+            margin-left: 10px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        #durationInfo {
+            margin-left: 10px;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+    </style>
+
+</head>
+<body>
+<div class="container">
+    <div class="card">
+
+        <div class="input1">
+            <label for="start"></label><input id="start" type="text" placeholder="Start Location">
+        </div>
+
+        <div class = "input2">
+            <label for="goal"></label><input id="goal" type="text" placeholder="Goal Location">
+        </div>
+
+        <div class="button-container">
+            <label for="travelMode"></label>
+
+            <select id="travelMode" >
+                <option value="DRIVING">Car</option>
+<!--                <option value="TRANSIT">TRANSIT</option>-->
+                <option value="WALKING">Walking</option>
+            </select>
+
+            <button onclick="calculateRoute()">Find</button>
+            <button onclick="clearFields()">Clear</button>
+            <button onclick="centerMap()">Center</button>
+        </div>
+
+        <div class="button-container">
+            <div class="button-container" >
+                <span style="margin-top: 5px ">Distance:</span>
+                <div id="distanceInfo" style="margin-top: 5px ; margin-right: 10px "></div>
+            </div>
+
+            <div class="button-container" >
+                <span style="margin-top: 5px ">Duration:</span>
+                <div id="durationInfo" style="margin-top: 5px  "></div>
+            </div>
+        </div>
+
+
+  </div>
+
+</div>
+
+  <div id="map" style="height: 945px; width: 100%;"></div>
+</body>
+</html>
+
+
+
+
